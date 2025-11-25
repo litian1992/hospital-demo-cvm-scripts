@@ -4,13 +4,12 @@
 # This runs on first boot to configure the VM to pull and run the container
 
 function setup_nodejs_ex() {
-packages=("podman" "podman-docker" "firewalld" "nginx" "trustee-guest-components")
-for pkg in $packages; do
-    dnf install -y $pkg
-done
+packages="podman podman-docker firewalld nginx trustee-guest-components"
+dnf install -y $packages
 
 # Pull secret for OpenShift image registry
-cat /root/.docker/config.json <<'EOF'
+[ -d /root/.docker ] || mkdir -p /root/.docker
+cat << EOF > /root/.docker/config.json
 {
   "auths": {
     "image-registry.openshift-image-registry.svc:5000": {
@@ -25,22 +24,22 @@ EOF
 chmod 600 /root/.docker/config.json
 
 # SSL of Trustee server
-cat /etc/trusteeserver.crt <<'EOF'
+cat << EOF > /etc/trusteeserver.crt
 REPLACE_WITH_TRUSTEE_SERVER_SSL
 EOF
 
 # Pull latest image and run
-cat /usr/local/bin/update-nodejs-ex.sh <<'EOF'
+cat << EOF > /usr/local/bin/nodejs-ex-update.sh
 #!/bin/bash
 set -e
 /usr/bin/podman rm -f nodejs-ex
   # Get decryption key of the container with an attestation
 echo "=== Fetch container decryption key ==="
-/usr/bin/trustee-attester --url https://trusteeserver:8080 --cert-file /etc/trusteeserver.crt \
-  --path default/test/container_key | base64 -d > /root/container_key.pem
+/usr/bin/trustee-attester --url https://kbs-route-trustee-operator-system.apps.uhfgfgde.eastus.aroapp.io/ \
+  get-resource --path default/test/container_key | base64 -d > /root/container_key.pem
 
 echo "=== Updating nodejs-ex container ==="
-/usr/bin/podman pull --decryption-key /root/container_key.pem \
+/usr/bin/podman pull \
   default-route-openshift-image-registry.apps.uhfgfgde.eastus.aroapp.io/janine-dev/nodejs-ex:latest
 rm -f /root/container_key.pem
 
@@ -55,7 +54,7 @@ EOF
 chmod 755 /usr/local/bin/nodejs-ex-update.sh
 
 # Systemd service for nodjs-ex
-cat /etc/systemd/system/nodejs-ex.service <<'EOF'
+cat << EOF > /etc/systemd/system/nodejs-ex.service
 [Unit]
 Description=Node.js Example Application (from OpenShift)
 After=network-online.target
@@ -73,17 +72,17 @@ EOF
 chmod 644 /etc/systemd/system/nodejs-ex.service
 
 # Nginx reverse proxy configuration
-cat /etc/nginx/conf.d/nodejs-ex.conf <<'EOF'
+cat << EOF > /etc/nginx/conf.d/nodejs-ex.conf
 server {
     listen 80;
     server_name _;
 
     location / {
         proxy_pass http://localhost:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
     location /health {
@@ -95,12 +94,12 @@ EOF
 chmod 644 /etc/nginx/conf.d/nodejs-ex.conf
 
 # Configure firewall
-systemctl enable firewalld
-systemctl start firewalld
-firewall-cmd --permanent --add-service=http
-firewall-cmd --permanent --add-service=https
-firewall-cmd --permanent --add-port=8080/tcp
-firewall-cmd --reload
+#systemctl enable firewalld
+#systemctl start firewalld
+#firewall-cmd --permanent --add-service=http
+#firewall-cmd --permanent --add-service=https
+#firewall-cmd --permanent --add-port=8080/tcp
+#firewall-cmd --reload
 
 # Enable and start nginx
 systemctl enable nginx
