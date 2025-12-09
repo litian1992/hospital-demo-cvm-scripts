@@ -3,30 +3,46 @@
 # Script for setting up nodejs-ex RHEL VM
 # This runs on first boot to configure the VM to pull and run the container
 
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -a|--quay-auth)
+            quay_auth="$2"
+            shift 2
+            ;;
+        -i|--image)
+            image_name="$2"
+            shift 2
+            ;;
+        -t|--trustee-url)
+            trustee_url="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
 function setup_nodejs_ex() {
 packages="podman podman-docker firewalld nginx trustee-guest-components"
 dnf install -y $packages
 
-# Pull secret for OpenShift image registry
-[ -d /root/.docker ] || mkdir -p /root/.docker
-cat << EOF > /root/.docker/config.json
+# Quay.io login
+[ -d /root/.config/containers ] || mkdir -p /root/.config/containers
+cat << EOF > /root/.config/containers/auth.json
 {
   "auths": {
-    "image-registry.openshift-image-registry.svc:5000": {
-      "auth": "REPLACE_WITH_BASE64_TOKEN"
-    },
-    "default-route-openshift-image-registry.apps.uhfgfgde.eastus.aroapp.io": {
-      "auth": "REPLACE_WITH_BASE64_TOKEN"
+    "quay.io": {
+      "auth": "$quay_auth"
     }
   }
 }
 EOF
-chmod 600 /root/.docker/config.json
-
-# SSL of Trustee server
-cat << EOF > /etc/trusteeserver.crt
-REPLACE_WITH_TRUSTEE_SERVER_SSL
-EOF
+chmod 600 /root/.config/containers/auth.json
 
 # Pull latest image and run
 cat << EOF > /usr/local/bin/nodejs-ex-update.sh
@@ -35,12 +51,12 @@ set -e
 /usr/bin/podman rm -f nodejs-ex
   # Get decryption key of the container with an attestation
 echo "=== Fetch container decryption key ==="
-/usr/bin/trustee-attester --url https://kbs-route-trustee-operator-system.apps.uhfgfgde.eastus.aroapp.io/ \
+/usr/bin/trustee-attester --url $trustee_url \
   get-resource --path default/test/container_key | base64 -d > /root/container_key.pem
 
 echo "=== Updating nodejs-ex container ==="
 /usr/bin/podman pull \
-  default-route-openshift-image-registry.apps.uhfgfgde.eastus.aroapp.io/janine-dev/nodejs-ex:latest
+  quay.io/$image_name
 rm -f /root/container_key.pem
 
 echo "✅ nodejs-ex updated successfully"
@@ -49,7 +65,7 @@ echo "✅ nodejs-ex updated successfully"
   -p 8080:8080 \
   -e NODE_ENV=production \
   -e PORT=8080 \
-  default-route-openshift-image-registry.apps.uhfgfgde.eastus.aroapp.io/janine-dev/nodejs-ex:latest
+  quay.io/$image_name
 EOF
 chmod 755 /usr/local/bin/nodejs-ex-update.sh
 
