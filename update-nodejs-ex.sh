@@ -50,9 +50,9 @@ cat << EOF > /usr/local/bin/nodejs-ex-update.sh
 set -e
 /usr/bin/podman rm -f nodejs-ex
   # Get decryption key of the container with an attestation
-echo "=== Fetch container decryption key ==="
+echo "=== Fetch secret from Trustee server ==="
 /usr/bin/trustee-attester --url $trustee_url \
-  get-resource --path default/test/container_key | base64 -d > /root/container_key.pem
+  get-resource --path default/secret/example-secret 2> /dev/null | base64 -d
 
 echo "=== Updating nodejs-ex container ==="
 /usr/bin/podman pull \
