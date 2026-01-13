@@ -1,63 +1,130 @@
 #!/bin/bash
-#
-# Setup script for nodejs-ex VM deployment via ArgoCD
-#
-# This creates the necessary secrets for ArgoCD to deploy VMs
-#
 
-set -e
+# Script for setting up nodejs-ex RHEL VM
+# This runs on first boot to configure the VM to pull and run the container
 
-NAMESPACE="azure-infrastructure"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -a|--quay-auth)
+            export quay_auth="$2"
+            shift 2
+            ;;
+        -i|--deid-image)
+            export deid_image="$2"
+            shift 2
+            ;;
+        -t|--trustee-url)
+            export trustee_url="$2"
+            shift 2
+            ;;
+        -s|--sidecar-image)
+            export sidecar_image="$2"
+            shift 2
+            ;;
+        -c|--connection-string)
+            export connection_string="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
 
-echo "=== Setting up VM Deployment Prerequisites ==="
+function setup_nodejs_ex() {
+packages="podman podman-docker firewalld nginx trustee-guest-components"
+dnf install -y $packages
 
-# Create namespace
-echo "Creating namespace: $NAMESPACE"
-oc create namespace $NAMESPACE 2>/dev/null || echo "Namespace already exists"
+# Quay.io login
+[ -d /root/.config/containers ] || mkdir -p /root/.config/containers
+cat << EOF > /root/.config/containers/auth.json
+{
+  "auths": {
+    "quay.io": {
+      "auth": "$quay_auth"
+    }
+  }
+}
+EOF
+chmod 600 /root/.config/containers/auth.json
 
-# Generate SSH key if it doesn't exist
-if [ ! -f ~/.ssh/nodejs-ex-vm-key ]; then
-    echo "Generating SSH key for VM access..."
-    ssh-keygen -t rsa -b 4096 -f ~/.ssh/nodejs-ex-vm-key -N "" -C "nodejs-ex-vm-key"
+# Pull latest image and run
+curl https://raw.githubusercontent.com/litian1992/hospital-demo-cvm-scripts/refs/heads/main/nodejs-ex-update.sh \
+    -o /usr/local/bin/nodejs-ex-update.sh 2> /dev/null
+chmod 755 /usr/local/bin/nodejs-ex-update.sh
+bash /usr/local/bin/nodejs-ex-update.sh
+
+# Systemd service for nodjs-ex
+cat << EOF > /etc/systemd/system/nodejs-ex.service
+[Unit]
+Description=Node.js Example Application (from OpenShift)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+ExecStart=/usr/local/bin/nodejs-ex-update.sh
+ExecStop=/usr/bin/podman stop -t 10 nodejs-ex
+[Install]
+WantedBy=multi-user.target
+EOF
+chmod 644 /etc/systemd/system/nodejs-ex.service
+
+# Nginx reverse proxy configuration
+cat << EOF > /etc/nginx/conf.d/nodejs-ex.conf
+# serves sidecar CDH resource
+server {
+    listen 127.0.0.1:8006;
+        server_name localhost;
+
+        location /cdh/resource/ {
+        alias /srv/http/;
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_localtime on;
+        default_type application/octet-stream;
+        add_header Cache-Control "no-store";
+    }
+}
+EOF
+chmod 644 /etc/nginx/conf.d/nodejs-ex.conf
+
+# Configure firewall
+#systemctl enable firewalld
+#systemctl start firewalld
+#firewall-cmd --permanent --add-service=http
+#firewall-cmd --permanent --add-service=https
+#firewall-cmd --permanent --add-port=8080/tcp
+#firewall-cmd --reload
+
+# Enable and start nginx
+semanage port -a -t http_port_t -p tcp 8006
+mkdir -p /srv/http; chcon -R -t httpd_sys_content_t /srv/http
+systemctl enable nginx
+systemctl start nginx
+
+# Enable and start nodejs-ex service
+systemctl daemon-reload
+systemctl enable nodejs-ex.service
+systemctl start nodejs-ex.service
+
+# Wait for service to start
+sleep 10
+
+# Log status
+systemctl status nodejs-ex.service --no-pager || true
+podman ps -a
+}
+#end function setup_nodejs_ex
+
+if ! { systemctl is-active nodejs-ex.service > /dev/null; }; then
+    setup_nodejs_ex
+else
+    systemctl restart nodejs-ex.service
 fi
-
-# Create SSH key secret
-echo "Creating SSH key secret..."
-oc create secret generic azure-ssh-key \
-    --from-file=id_rsa=~/.ssh/nodejs-ex-vm-key \
-    --from-file=id_rsa.pub=~/.ssh/nodejs-ex-vm-key.pub \
-    -n $NAMESPACE \
-    --dry-run=client -o yaml | oc apply -f -
-
-# Create Azure credentials secret (already exists in the YAML, but can override)
-echo "Azure credentials secret will be created from YAML manifest"
-
-# Optional: Expose OpenShift image registry
-echo ""
-echo "=== Exposing OpenShift Image Registry ==="
-oc patch configs.imageregistry.operator.openshift.io/cluster \
-    --type merge \
-    --patch '{"spec":{"defaultRoute":true}}' || echo "Route already exposed"
-
-# Get registry route
-REGISTRY_ROUTE=$(oc get route default-route -n openshift-image-registry -o jsonpath='{.spec.host}' 2>/dev/null || echo "Not exposed yet")
-
-echo ""
-echo "============================================"
-echo "✅ Setup Complete!"
-echo ""
-echo "OpenShift Registry: $REGISTRY_ROUTE"
-echo ""
-echo "Next steps:"
-echo "1. Deploy the ArgoCD Application:"
-echo "   oc apply -f applications/nodejs-ex-vm-deployment.yaml"
-echo ""
-echo "2. Watch the deployment:"
-echo "   oc get job -n $NAMESPACE -w"
-echo ""
-echo "3. Check VM logs:"
-echo "   oc logs -n $NAMESPACE job/deploy-nodejs-ex-vm"
-echo ""
-echo "4. Get VM IP:"
-echo "   az vm show -d -g nodejs-ex-vm-rg -n nodejs-ex-rhel-vm --query publicIps -o tsv"
-echo "============================================"
