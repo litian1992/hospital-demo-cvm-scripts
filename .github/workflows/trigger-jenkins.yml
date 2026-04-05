@@ -21,3 +21,4 @@ jobs:
           token: ${{ secrets.JENKINS_API_TOKEN }}
           job: "bigrock-demo-folder/bigrock-demo"
           insecure: true
+          parameters: "TRUSTEE_SERVER_IP=20.85.208.197,GIT_BRANCH=experiment,GIT_URL=github.com/rh-summit-coco/hospital-demo-gitops.git"
