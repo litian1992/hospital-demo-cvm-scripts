@@ -10,14 +10,14 @@ jobs:
   trigger:
     # Check the author email condition here
     #if: github.event.head_commit.author.email == 'coco@openshift.local'
-    if: github.event.head_commit.author.email == 'liitan@redhat.com'
+    if: github.event.head_commit.author.email == 'litian@redhat.com'
     runs-on: litian-relay
     steps:
       - name: Trigger Jenkins Pipeline
         uses: appleboy/jenkins-action@v1.2.0
         with:
           url: "https://jenkins-csb-esxi-ci.dno.corp.redhat.com/"
-          user: "github-runner"
+          user: "litian"
           token: ${{ secrets.JENKINS_API_TOKEN }}
-          job: "bigrock-demo-folder/job/bigrock-demo"
+          job: "bigrock-demo-folder/bigrock-demo"
           insecure: true
